@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Invoice Extractor</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 40px; max-width: 600px; margin: auto; }
+    h2 { color: #444; }
+    input[type="file"] { margin-bottom: 10px; }
+    button { padding: 8px 16px; background: #444; color: white; border: none; cursor: pointer; }
+    pre { background: #f3f3f3; padding: 10px; border-radius: 4px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>Upload Invoice</h2>
+  <form id="uploadForm">
+    <input type="file" id="file" required />
+    <br />
+    <button type="submit">Extract</button>
+  </form>
+
+  <h3>Extracted Data:</h3>
+  <pre id="result">No data yet...</pre>
+
+  <script>
+    const form = document.getElementById("uploadForm");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById("file");
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+
+      const res = await fetch("/extract", {
+        method: "POST",
+        body: formData
+      });
+
+      const json = await res.json();
+      document.getElementById("result").textContent = JSON.stringify(json.entities, null, 2);
+    });
+  </script>
+</body>
+</html>
