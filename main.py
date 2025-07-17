@@ -10,10 +10,17 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from parser.file_router import parse_file
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
 
 # 🔐 Load environment variables
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL)
+
 
 # 🧠 Setup Groq client
 client = Groq(api_key=GROQ_API_KEY)
@@ -95,6 +102,7 @@ async def extract_invoice(file: UploadFile = File(...)):
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 # 🌐 Static web frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
