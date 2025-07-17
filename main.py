@@ -9,6 +9,8 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+from db.insert_facture import insert_facture
 from parser.file_router import parse_file
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -46,11 +48,13 @@ def extract_entities_with_ai(text: str) -> dict:
                 {
                     "role": "system",
                     "content": (
-                        "You are an AI invoice parser. Extract the following fields:\n"
+                        "You are an AI invoice parser. Extract the following fields EXACTLY as listed:\n"
                         "- invoice_number\n- invoice_date\n- client_name\n- client_address\n"
-                        "- client_ice\n- client_cnss\n- client_if\n- total_ht\n"
-                        "- vat_amount\n- total_ttc\n- currency\n\n"
-                        "Return ONLY a valid JSON object. No explanations, no markdown, no preambles."
+                        "- client_ice\n- client_cnss (social security number)\n- client_if (tax ID)\n"
+                        "- total_ht\n- vat_amount\n- total_ttc\n- currency\n\n"
+                        "Return ONLY a valid JSON object with those keys. Do NOT return null if the field is present in the text."
+
+
                     )
                 },
                 {
@@ -95,13 +99,30 @@ async def extract_invoice(file: UploadFile = File(...)):
         text = parse_file(file.filename, open(tmp_path, "rb").read())
         ai_entities = extract_entities_with_ai(text)
 
+        # Appel à la fonction d'insertion uniquement si pas d'erreur dans ai_entities
+        if ai_entities and not ai_entities.get("error"):
+            insert_facture({
+                "numero": ai_entities.get("invoice_number"),
+                "date": ai_entities.get("invoice_date"),
+                "client": ai_entities.get("client_name"),
+                "ice": ai_entities.get("client_ice"),
+                "cnss": ai_entities.get("client_cnss"),
+                "if": ai_entities.get("client_if"),
+                "total_ht": ai_entities.get("total_ht"),
+                "tva": ai_entities.get("vat_amount"),
+                "total_ttc": ai_entities.get("total_ttc"),
+            })
+
         return JSONResponse(content={
             "text_preview": text[:1000],
             "entities": ai_entities
         })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()  # Affiche la trace complète dans la console
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 
 # 🌐 Static web frontend

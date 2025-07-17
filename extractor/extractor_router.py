@@ -1,7 +1,6 @@
 import re
 import pytesseract
-from pdf2image import convert_from_path
-from PIL import Image
+
 
 # Chemin vers Tesseract installé (adapter si besoin)
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
