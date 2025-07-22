@@ -1,43 +1,125 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <title>Invoice Extractor</title>
+  <title>AI Extractor</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 40px; max-width: 600px; margin: auto; }
-    h2 { color: #444; }
-    input[type="file"] { margin-bottom: 10px; }
-    button { padding: 8px 16px; background: #444; color: white; border: none; cursor: pointer; }
-    pre { background: #f3f3f3; padding: 10px; border-radius: 4px; white-space: pre-wrap; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: auto;
+      padding: 20px;
+    }
+    h2 {
+      color: #333;
+    }
+    form {
+      margin-bottom: 20px;
+    }
+    input, select, button {
+      display: block;
+      margin: 8px 0;
+      padding: 8px;
+      width: 100%;
+      max-width: 100%;
+    }
+    #output {
+      white-space: pre-wrap;
+      background: #f4f4f4;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
   </style>
 </head>
 <body>
-  <h2>Upload Invoice</h2>
-  <form id="uploadForm">
-    <input type="file" id="file" required />
-    <br />
-    <button type="submit">Extract</button>
+
+  <h2>Choisir votre entreprise</h2>
+  <select id="entreprise-select" required></select>
+  <button type="button" onclick="toggleForm()">+ Nouvelle entreprise</button>
+
+  <form id="new-entreprise-form" style="display: none;" onsubmit="submitEntreprise(event)">
+    <input name="nom" placeholder="Nom" required>
+    <input name="type" placeholder="Type">
+    <input name="ice" placeholder="ICE">
+    <input name="if" placeholder="IF">
+    <input name="cnss" placeholder="CNSS">
+    <input name="adresse" placeholder="Adresse">
+    <input name="tel" placeholder="Téléphone">
+    <input name="email" placeholder="Email">
+    <input name="siteweb" placeholder="Site Web">
+    <button type="submit">Créer l’entreprise</button>
   </form>
 
-  <h3>Extracted Data:</h3>
-  <pre id="result">No data yet...</pre>
+  <hr>
+
+  <h2>Charger une facture</h2>
+  <form id="upload-form" onsubmit="submitFile(event)">
+    <input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" required>
+    <button type="submit">Extraire</button>
+  </form>
+
+  <h3>Résultat :</h3>
+  <pre id="output">...</pre>
 
   <script>
-    const form = document.getElementById("uploadForm");
-    form.addEventListener("submit", async (e) => {
+    async function fetchEntreprises() {
+      const res = await fetch("/entreprises");
+      const data = await res.json();
+      const select = document.getElementById("entreprise-select");
+      select.innerHTML = ""; // Clear previous options
+      data.forEach(e => {
+        const opt = document.createElement("option");
+        opt.value = e.id;
+        opt.textContent = e.nom;
+        select.appendChild(opt);
+      });
+    }
+
+    function toggleForm() {
+      const form = document.getElementById("new-entreprise-form");
+      form.style.display = form.style.display === "none" ? "block" : "none";
+    }
+
+    async function submitEntreprise(e) {
       e.preventDefault();
-      const fileInput = document.getElementById("file");
+      const form = e.target;
+      const data = new FormData(form);
+      await fetch("/entreprises", {
+        method: "POST",
+        body: data
+      });
+      alert("Entreprise créée !");
+      form.reset();
+      toggleForm();
+      fetchEntreprises();
+    }
+
+    async function submitFile(e) {
+      e.preventDefault();
+      const fileInput = e.target.file;
+      const entrepriseId = document.getElementById("entreprise-select").value;
+      if (!fileInput.files.length || !entrepriseId) {
+        alert("Veuillez sélectionner un fichier et une entreprise.");
+        return;
+      }
+
       const formData = new FormData();
       formData.append("file", fileInput.files[0]);
+      formData.append("entreprise_id", entrepriseId);
 
       const res = await fetch("/extract", {
         method: "POST",
         body: formData
       });
 
-      const json = await res.json();
-      document.getElementById("result").textContent = JSON.stringify(json.entities, null, 2);
-    });
+      const data = await res.json();
+      document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+    }
+
+    // Initial load
+    fetchEntreprises();
   </script>
+
 </body>
 </html>

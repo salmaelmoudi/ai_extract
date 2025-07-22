@@ -1,20 +1,25 @@
-import os 
+import os
 import json
 import re
 import shutil
 import tempfile
 from dotenv import load_dotenv
 from groq import Groq
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from db.insert_facture import insert_facture
 from parser.file_router import parse_file
-from extractor.extractor_router import extract_entities as extract_entities_fallback  # <-- added
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from extractor.extractor_router import extract_entities as extract_entities_fallback
+from sqlalchemy import create_engine
+from db.entreprise import (
+    insert_entreprise,
+    get_all_entreprises,
+    get_entreprise_by_id,
+    create_entreprise_table
+)
 
 # 🔐 Load environment variables
 load_dotenv()
@@ -28,6 +33,11 @@ client = Groq(api_key=GROQ_API_KEY)
 # 🚀 FastAPI app setup
 app = FastAPI()
 
+# 🚦 Create Entreprise table on startup
+@app.on_event("startup")
+def startup():
+    create_entreprise_table()
+
 # 🌐 CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -37,63 +47,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 📦 Extract AI entities from invoice text using Groq
-def extract_entities_with_ai(text: str) -> dict:
+# 📦 AI entity extraction function with entreprise exclusion
+
+def extract_entities_with_ai(text: str, excluded_entreprise: dict) -> dict:
     try:
+        exclusion_block = "\n".join([
+            f"Nom: {excluded_entreprise.get('nom') or ''}",
+            f"ICE: {excluded_entreprise.get('ice') or ''}",
+            f"IF: {excluded_entreprise.get('if') or ''}",
+            f"CNSS: {excluded_entreprise.get('cnss') or ''}",
+            f"Adresse: {excluded_entreprise.get('adresse') or ''}"
+        ])
+
+        prompt = f"""
+You are an AI invoice parser.
+
+📌 IMPORTANT: The invoice you are parsing contains information about TWO companies:
+- The issuer (our own company — you must ignore it)
+- The client or provider (the other company — you must extract it)
+
+🚫 DO NOT extract or return information about the following company:
+{exclusion_block}
+
+✅ Your job is to identify and return structured data for the OTHER company (the counterparty).
+Look for company details in the header, footer, or body text of the invoice.
+
+You must return a JSON object containing the following fields:
+- invoice_number
+- invoice_date
+- client_name
+- client_address
+- client_ice
+- client_cnss
+- client_if
+- total_ht
+- vat_amount
+- total_ttc
+- currency
+
+Return only a valid JSON object. Do not include explanations, markdown, or any formatting.
+If any field is missing, return null or an empty string — do not omit it from the JSON.
+        """
+
         completion = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI invoice parser. Extract the following fields EXACTLY as listed:\n"
-                        "- invoice_number\n- invoice_date\n- client_name\n- client_address\n"
-                        "- client_ice\n- client_cnss (social security number)\n- client_if (tax ID)\n"
-                        "- total_ht\n- vat_amount\n- total_ttc\n- currency\n\n"
-                        "Return ONLY a valid JSON object with those keys. Do NOT return null if the field is present in the text."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
+                {"role": "system", "content": prompt.strip()},
+                {"role": "user", "content": text}
             ],
-            temperature=1,
+            temperature=0.7,
             max_tokens=1024,
             top_p=1,
             stream=False
         )
 
         raw_reply = completion.choices[0].message.content.strip()
-
-        # 🕵️ Try to extract only the first valid JSON object
         json_match = re.search(r'\{.*?\}', raw_reply, re.DOTALL)
+
         if not json_match:
-            return {
-                "error": "Could not find JSON object in AI reply",
-                "raw_reply": raw_reply
-            }
+            return {"error": "Could not find JSON object in AI reply", "raw_reply": raw_reply}
 
         json_str = json_match.group(0)
 
         try:
             return json.loads(json_str)
         except Exception as e:
-            return {
-                "error": "Failed to parse AI response",
-                "details": str(e),
-                "raw_json": json_str
-            }
+            return {"error": "Failed to parse AI response", "details": str(e), "raw_json": json_str}
 
     except Exception as e:
-        return {
-            "error": "Failed to call AI model",
-            "details": str(e)
-        }
+        return {"error": "Failed to call AI model", "details": str(e)}
 
-# 📥 File upload + extraction endpoint
+# 📥 File upload + extraction endpoint with entreprise selection
 @app.post("/extract")
-async def extract_invoice(file: UploadFile = File(...)):
+async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = Form(...)):
     suffix = file.filename.split(".")[-1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -101,22 +127,24 @@ async def extract_invoice(file: UploadFile = File(...)):
 
     try:
         text = parse_file(file.filename, open(tmp_path, "rb").read())
-        ai_entities = extract_entities_with_ai(text)
+        local_entreprise = get_entreprise_by_id(entreprise_id)
 
-        # Define required fields for completeness check
+        if not local_entreprise:
+            return JSONResponse(status_code=400, content={"error": "Invalid entreprise_id"})
+
+        ai_entities = extract_entities_with_ai(text, local_entreprise)
+
         required_keys = [
             "invoice_number", "invoice_date", "client_name", "client_address",
             "client_ice", "client_cnss", "client_if",
             "total_ht", "vat_amount", "total_ttc", "currency"
         ]
-
-        # Check if any key is missing or blank/null
         missing = [k for k in required_keys if ai_entities.get(k) in [None, "", "null"]] if isinstance(ai_entities, dict) else required_keys
+
         if missing:
             print(f"⚠️ Missing keys from AI: {missing}")
             ai_entities = extract_entities_fallback(text)
 
-        # Only insert if it's a dict and no top-level error
         if isinstance(ai_entities, dict) and not ai_entities.get("error"):
             insert_facture({
                 "numero": ai_entities.get("invoice_number") or ai_entities.get("numero"),
@@ -146,3 +174,40 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/")
 async def home():
     return FileResponse("static/index.html")
+
+# 🏢 Entreprise API endpoints
+@app.get("/entreprises")
+def list_entreprises():
+    return get_all_entreprises()
+
+@app.get("/entreprise/{ent_id}")
+def get_entreprise(ent_id: int):
+    data = get_entreprise_by_id(ent_id)
+    if not data:
+        return JSONResponse(status_code=404, content={"error": "Entreprise not found"})
+    return data
+
+@app.post("/entreprises")
+def add_entreprise(
+    nom: str = Form(...),
+    type: str = Form(None),
+    ice: str = Form(None),
+    if_: str = Form(None),
+    cnss: str = Form(None),
+    adresse: str = Form(None),
+    tel: str = Form(None),
+    email: str = Form(None),
+    siteweb: str = Form(None)
+):
+    insert_entreprise({
+        "nom": nom,
+        "type": type,
+        "ice": ice,
+        "if": if_,
+        "cnss": cnss,
+        "adresse": adresse,
+        "tel": tel,
+        "email": email,
+        "siteweb": siteweb
+    })
+    return {"status": "success"}
