@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import tempfile
+from datetime import datetime
 from dotenv import load_dotenv
 from groq import Groq
 from fastapi import FastAPI, File, UploadFile
@@ -37,6 +38,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def safe_float(val):
+    try:
+        if not val:
+            return 0.0
+        s = str(val)
+        # Extraire uniquement chiffres, point, virgule, et signe moins
+        filtered = re.sub(r"[^0-9,.\-]", "", s)
+        # Remplacer la virgule par un point
+        filtered = filtered.replace(",", ".")
+        return float(filtered)
+    except Exception as e:
+        print(f"Erreur conversion float pour '{val}': {e}")
+        return 0.0
+def safe_date(date_str):
+    """
+    Convertit une date texte en objet datetime.date.
+    Retourne None si la conversion échoue.
+    """
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return dt.date()  # <-- retourne un objet datetime.date, PAS une string
+        except:
+            continue
+    return None
+
+def extract_first_json(text):
+    """
+    Extrait le premier objet JSON complet dans un texte donné,
+    même si du texte est avant ou après.
+    """
+    stack = []
+    start_idx = None
+    for i, c in enumerate(text):
+        if c == '{':
+            if start_idx is None:
+                start_idx = i
+            stack.append(c)
+        elif c == '}' and stack:
+            stack.pop()
+            if not stack and start_idx is not None:
+                return text[start_idx:i+1]
+    return None
+
 # 📦 Extract AI entities from invoice text using Groq
 def extract_entities_with_ai(text: str) -> dict:
     try:
@@ -66,24 +114,14 @@ def extract_entities_with_ai(text: str) -> dict:
 
         raw_reply = completion.choices[0].message.content.strip()
 
-        # 🕵️ Try to extract only the first valid JSON object
-        json_match = re.search(r'\{.*?\}', raw_reply, re.DOTALL)
-        if not json_match:
+        json_str = extract_first_json(raw_reply)
+        if not json_str:
             return {
                 "error": "Could not find JSON object in AI reply",
                 "raw_reply": raw_reply
             }
 
-        json_str = json_match.group(0)
-
-        try:
-            return json.loads(json_str)
-        except Exception as e:
-            return {
-                "error": "Failed to parse AI response",
-                "details": str(e),
-                "raw_json": json_str
-            }
+        return json.loads(json_str)
 
     except Exception as e:
         return {
