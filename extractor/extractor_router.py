@@ -7,6 +7,7 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 # Fonction principale : extraire toutes les entités d'une facture
 def extract_entities(text: str) -> dict:
+    vat_value = extract_vat(text)
     return {
         "invoice_number": extract_invoice_number(text),
         "date": extract_date(text),
@@ -15,9 +16,11 @@ def extract_entities(text: str) -> dict:
         "cnss": extract_cnss(text),
         "if": extract_if(text),
         "total_ht": extract_total_ht(text),
-        "vat": extract_vat(text),
+        "tva": vat_value,
+        "vat_amount": vat_value,
         "total_ttc": extract_total_ttc(text),
     }
+
 
 # Fonctions d'extraction via regex
 def extract_invoice_number(text):

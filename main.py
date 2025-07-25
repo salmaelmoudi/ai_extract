@@ -1,26 +1,28 @@
-import os
 import json
+import os
 import re
 import shutil
 import tempfile
 from datetime import datetime
-from dotenv import load_dotenv
-from groq import Groq
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
-from db.insert_facture import insert_facture
-from parser.file_router import parse_file
-from extractor.extractor_router import extract_entities as extract_entities_fallback
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from groq import Groq
 from sqlalchemy import create_engine
+from extractor.extractor_router import extract_text_from_pdf  # ✅ Ajouté tout en haut
+
 from db.entreprise import (
     insert_entreprise,
     get_all_entreprises,
     get_entreprise_by_id,
     create_entreprise_table
 )
+from db.insert_facture import insert_facture
+from extractor.extractor_router import extract_entities as extract_entities_fallback
+from parser.file_router import parse_file
 
 # 🔐 Load environment variables
 load_dotenv()
@@ -208,16 +210,30 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
             ai_entities = extract_entities_fallback(text)
 
         if isinstance(ai_entities, dict) and not ai_entities.get("error"):
+            # 🔍 Essai d'extraction du numéro de facture manuellement
+            if not ai_entities.get("invoice_number"):
+                match = re.search(r"(Facture|Invoice)[^\d]{0,5}(\d{4,})", text, re.IGNORECASE)
+                if match:
+                    ai_entities["invoice_number"] = match.group(2)
+                    print(f"✅ Numéro de facture récupéré depuis le texte: {ai_entities['invoice_number']}")
+                else:
+                    print("❌ Numéro de facture introuvable dans le texte.")
+
+            # Vérifie que la date est présente
+            date_valide = ai_entities.get("invoice_date") or ai_entities.get("date")
+            if not date_valide:
+                return JSONResponse(status_code=400, content={"error": "Date manquante ou invalide dans les données extraites."})
+
             insert_facture({
                 "numero": ai_entities.get("invoice_number") or ai_entities.get("numero"),
-                "date": ai_entities.get("invoice_date") or ai_entities.get("date"),
+                "date": date_valide,
                 "client": ai_entities.get("client_name") or ai_entities.get("client"),
                 "ice": ai_entities.get("client_ice") or ai_entities.get("ice"),
-                "cnss": ai_entities.get("client_cnss") or ai_entities.get("cnss"),
-                "if": ai_entities.get("client_if") or ai_entities.get("if"),
-                "total_ht": ai_entities.get("total_ht"),
+                "cnss": ai_entities.get("client_cnss", "") or ai_entities.get("cnss", ""),
+                "if": ai_entities.get("client_if", "") or ai_entities.get("if", ""),
+                "total_ht": ai_entities.get("total_ht") or ai_entities.get("montant_ht"),
                 "tva": ai_entities.get("vat_amount") or ai_entities.get("tva"),
-                "total_ttc": ai_entities.get("total_ttc"),
+                "total_ttc": ai_entities.get("total_ttc") or ai_entities.get("montant_ttc"),
             })
 
         return JSONResponse(content={

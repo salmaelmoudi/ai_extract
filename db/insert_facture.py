@@ -1,10 +1,9 @@
 from datetime import datetime
 from db.database import get_connection
+
 def insert_facture(data):
     conn = get_connection()
     cursor = conn.cursor()
-
-    from datetime import datetime
 
     def safe_float(value):
         if not value:
@@ -15,13 +14,20 @@ def insert_facture(data):
         except ValueError:
             return None
 
-    try:
-        parsed_date = datetime.strptime(data.get('date'), "%d/%m/%Y").strftime("%Y-%m-%d")
-    except ValueError:
-        try:
-            parsed_date = datetime.strptime(data.get('date'), "%Y-%m-%d").strftime("%Y-%m-%d")
-        except ValueError:
-            parsed_date = None
+    # ✅ Conversion sûre de la date
+    raw_date = data.get('date')
+    parsed_date = None
+
+    if raw_date:
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y", "%d-%m-%y"):
+            try:
+                parsed_date = datetime.strptime(raw_date, fmt).strftime("%Y-%m-%d")
+                break
+            except ValueError:
+                continue
+
+    if not parsed_date:
+        print(f"⚠️ Date non reconnue: {raw_date}")
 
     cursor.execute("""
         INSERT INTO Factures (numero, date, client, ice, cnss, [if], total_ht, tva, total_ttc)
