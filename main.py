@@ -10,10 +10,10 @@ from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from groq import Groq
+import openai
 from sqlalchemy import create_engine
-from extractor.extractor_router import extract_text_from_pdf  # ✅ Ajouté tout en haut
 
+from extractor.extractor_router import extract_text_from_pdf
 from db.entreprise import (
     insert_entreprise,
     get_all_entreprises,
@@ -26,17 +26,18 @@ from parser.file_router import parse_file
 
 # 🔐 Load environment variables
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
-# 🧠 Setup Groq client
-client = Groq(api_key=GROQ_API_KEY)
+# 🧠 Setup Azure OpenAI client
+openai.api_type = "azure"
+openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")
+openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
+openai.api_version = os.getenv("AZURE_OPENAI_API_VERSION")
 
 # 🚀 FastAPI app setup
 app = FastAPI()
 
-# 🚦 Create Entreprise table on startup
 @app.on_event("startup")
 def startup():
     create_entreprise_table()
@@ -56,35 +57,26 @@ def safe_float(val):
         if not val:
             return 0.0
         s = str(val)
-        # Extraire uniquement chiffres, point, virgule, et signe moins
         filtered = re.sub(r"[^0-9,.\-]", "", s)
-        # Remplacer la virgule par un point
         filtered = filtered.replace(",", ".")
         return float(filtered)
     except Exception as e:
         print(f"Erreur conversion float pour '{val}': {e}")
         return 0.0
+
 def safe_date(date_str):
-    """
-    Convertit une date texte en objet datetime.date.
-    Retourne None si la conversion échoue.
-    """
     if not date_str:
         return None
     date_str = str(date_str).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
         try:
             dt = datetime.strptime(date_str, fmt)
-            return dt.date()  # <-- retourne un objet datetime.date, PAS une string
+            return dt.date()
         except:
             continue
     return None
 
 def extract_first_json(text):
-    """
-    Extrait le premier objet JSON complet dans un texte donné,
-    même si du texte est avant ou après.
-    """
     stack = []
     start_idx = None
     for i, c in enumerate(text):
@@ -98,10 +90,8 @@ def extract_first_json(text):
                 return text[start_idx:i+1]
     return None
 
-# 📦 Extract AI entities from invoice text using Groq
-
+# 📦 Extraction avec Azure OpenAI
 def extract_entities_with_ai(text: str, excluded_entreprise: dict) -> dict:
-
     try:
         exclusion_block = "\n".join([
             f"Nom: {excluded_entreprise.get('nom') or ''}",
@@ -141,8 +131,8 @@ Return only a valid JSON object. Do not include explanations, markdown, or any f
 If any field is missing, return null or an empty string — do not omit it from the JSON.
         """
 
-        completion = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+        completion = openai.ChatCompletion.create(
+            engine=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
             messages=[
                 {"role": "system", "content": prompt.strip()},
                 {"role": "user", "content": text}
@@ -154,34 +144,15 @@ If any field is missing, return null or an empty string — do not omit it from 
         )
 
         raw_reply = completion.choices[0].message.content.strip()
-
-
         json_str = extract_first_json(raw_reply)
         if not json_str:
-            return {
-                "error": "Could not find JSON object in AI reply",
-                "raw_reply": raw_reply
-            }
-
-        return json.loads(json_str)
-
-        json_match = re.search(r'\{.*?\}', raw_reply, re.DOTALL)
-
-        if not json_match:
             return {"error": "Could not find JSON object in AI reply", "raw_reply": raw_reply}
-
-        json_str = json_match.group(0)
-
-        try:
-            return json.loads(json_str)
-        except Exception as e:
-            return {"error": "Failed to parse AI response", "details": str(e), "raw_json": json_str}
-
+        return json.loads(json_str)
 
     except Exception as e:
         return {"error": "Failed to call AI model", "details": str(e)}
 
-# 📥 File upload + extraction endpoint with entreprise selection
+# 📥 Upload + extraction
 @app.post("/extract")
 async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = Form(...)):
     suffix = file.filename.split(".")[-1].lower()
@@ -210,7 +181,6 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
             ai_entities = extract_entities_fallback(text)
 
         if isinstance(ai_entities, dict) and not ai_entities.get("error"):
-            # 🔍 Essai d'extraction du numéro de facture manuellement
             if not ai_entities.get("invoice_number"):
                 match = re.search(r"(Facture|Invoice)[^\d]{0,5}(\d{4,})", text, re.IGNORECASE)
                 if match:
@@ -219,7 +189,6 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
                 else:
                     print("❌ Numéro de facture introuvable dans le texte.")
 
-            # Vérifie que la date est présente
             date_valide = ai_entities.get("invoice_date") or ai_entities.get("date")
             if not date_valide:
                 return JSONResponse(status_code=400, content={"error": "Date manquante ou invalide dans les données extraites."})
@@ -253,7 +222,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def home():
     return FileResponse("static/index.html")
 
-# 🏢 Entreprise API endpoints
 @app.get("/entreprises")
 def list_entreprises():
     return get_all_entreprises()
