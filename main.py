@@ -13,6 +13,10 @@ from fastapi.staticfiles import StaticFiles
 import openai
 from sqlalchemy import create_engine
 
+from db.fournisseur import create_fournisseur_table
+from db.produit import create_produit_table
+
+
 from extractor.extractor_router import extract_text_from_pdf
 from db.entreprise import (
     insert_entreprise,
@@ -41,6 +45,8 @@ app = FastAPI()
 @app.on_event("startup")
 def startup():
     create_entreprise_table()
+    create_fournisseur_table()
+    create_produit_table()
 
 # 🌐 CORS configuration
 app.add_middleware(
@@ -106,30 +112,40 @@ You are an AI invoice parser.
 
 📌 IMPORTANT: The invoice you are parsing contains information about TWO companies:
 - The issuer (our own company — you must ignore it)
-- The client or provider (the other company — you must extract it)
+- The supplier (the other company — you must extract it)
 
 🚫 DO NOT extract or return information about the following company:
 {exclusion_block}
 
-✅ Your job is to identify and return structured data for the OTHER company (the counterparty).
-Look for company details in the header, footer, or body text of the invoice.
+✅ Your job is to identify and return structured data for the OTHER company (the supplier).
+Look for supplier details in the header, footer, or body text of the invoice.
 
-You must return a JSON object containing the following fields:
+You must return a JSON object containing:
+
+Main Fields:
 - invoice_number
 - invoice_date
-- client_name
-- client_address
-- client_ice
-- client_cnss
-- client_if
+- fournisseur_name
+- fournisseur_address
+- fournisseur_ice
+- fournisseur_cnss
+- fournisseur_if
 - total_ht
 - vat_amount
 - total_ttc
 - currency
 
+Line Items:
+- products: a list of objects, each with:
+  - designation
+  - quantity
+  - unit_price
+  - total_price
+
 Return only a valid JSON object. Do not include explanations, markdown, or any formatting.
-If any field is missing, return null or an empty string — do not omit it from the JSON.
+If any field is missing, return null or an empty string — do not omit it.
         """
+
 
         completion = openai.ChatCompletion.create(
             engine=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
@@ -170,8 +186,8 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
         ai_entities = extract_entities_with_ai(text, local_entreprise)
 
         required_keys = [
-            "invoice_number", "invoice_date", "client_name", "client_address",
-            "client_ice", "client_cnss", "client_if",
+            "invoice_number", "invoice_date", "fournisseur_name", "fournisseur_address",
+            "fournisseur_ice", "fournisseur_cnss", "fournisseur_if",
             "total_ht", "vat_amount", "total_ttc", "currency"
         ]
         missing = [k for k in required_keys if ai_entities.get(k) in [None, "", "null"]] if isinstance(ai_entities, dict) else required_keys
@@ -196,10 +212,10 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
             insert_facture({
                 "numero": ai_entities.get("invoice_number") or ai_entities.get("numero"),
                 "date": date_valide,
-                "client": ai_entities.get("client_name") or ai_entities.get("client"),
-                "ice": ai_entities.get("client_ice") or ai_entities.get("ice"),
-                "cnss": ai_entities.get("client_cnss", "") or ai_entities.get("cnss", ""),
-                "if": ai_entities.get("client_if", "") or ai_entities.get("if", ""),
+                "client": ai_entities.get("fournisseur_name") or ai_entities.get("fournisseur"),
+                "ice": ai_entities.get("fournisseur_ice") or ai_entities.get("ice"),
+                "cnss": ai_entities.get("fournisseur_cnss", "") or ai_entities.get("cnss", ""),
+                "if": ai_entities.get("fournisseur_if", "") or ai_entities.get("if", ""),
                 "total_ht": ai_entities.get("total_ht") or ai_entities.get("montant_ht"),
                 "tva": ai_entities.get("vat_amount") or ai_entities.get("tva"),
                 "total_ttc": ai_entities.get("total_ttc") or ai_entities.get("montant_ttc"),
