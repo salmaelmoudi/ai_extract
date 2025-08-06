@@ -24,8 +24,7 @@ def insert_fournisseur(data):
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Check if exists
-    cursor.execute("SELECT id FROM Fournisseur WHERE ice = ?", data["ice"])
+    cursor.execute("SELECT id FROM Fournisseur WHERE nom = ? AND ice = ?", (data["nom"], data["ice"]))
     row = cursor.fetchone()
     if row:
         conn.close()
@@ -38,8 +37,9 @@ def insert_fournisseur(data):
         data["nom"], data["ice"], data["if"], data["adresse"],
         data["tel"], data["email"], data["siteweb"]
     ))
+    cursor.execute("SELECT SCOPE_IDENTITY()")
+    inserted_id = cursor.fetchone()[0]
     conn.commit()
-    inserted_id = cursor.execute("SELECT SCOPE_IDENTITY()").fetchone()[0]
     conn.close()
     return inserted_id
 

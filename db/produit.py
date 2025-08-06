@@ -27,10 +27,10 @@ def insert_produits(factures_id, produits):
         VALUES (?, ?, ?, ?, ?)
         """, (
             factures_id,
-            p.get("name") or p.get("nom"),
+            p.get("designation") or p.get("name") or p.get("nom"),
             int(p.get("quantity", 0)),
             float(p.get("unit_price", 0)),
-            float(p.get("total", 0))
+            float(p.get("total_price", 0)) or float(p.get("total", 0))
         ))
     conn.commit()
     conn.close()

@@ -16,7 +16,6 @@ from sqlalchemy import create_engine
 from db.fournisseur import create_fournisseur_table
 from db.produit import create_produit_table
 
-
 from extractor.extractor_router import extract_text_from_pdf
 from db.entreprise import (
     insert_entreprise,
@@ -56,7 +55,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 def safe_float(val):
     try:
@@ -99,7 +97,7 @@ def extract_first_json(text):
 # 📦 Extraction avec Azure OpenAI
 def extract_entities_with_ai(text: str, excluded_entreprise: dict) -> dict:
     try:
-        exclusion_block = "\n".join([
+        client_info = "\n".join([
             f"Nom: {excluded_entreprise.get('nom') or ''}",
             f"ICE: {excluded_entreprise.get('ice') or ''}",
             f"IF: {excluded_entreprise.get('if') or ''}",
@@ -108,21 +106,13 @@ def extract_entities_with_ai(text: str, excluded_entreprise: dict) -> dict:
         ])
 
         prompt = f"""
-You are an AI invoice parser.
+You are parsing an invoice. The following enterprise is the client (do NOT extract this one):
 
-📌 IMPORTANT: The invoice you are parsing contains information about TWO companies:
-- The issuer (our own company — you must ignore it)
-- The supplier (the other company — you must extract it)
+{client_info}
 
-🚫 DO NOT extract or return information about the following company:
-{exclusion_block}
+Your job is to identify and return structured data about the *other* company (the supplier).
 
-✅ Your job is to identify and return structured data for the OTHER company (the supplier).
-Look for supplier details in the header, footer, or body text of the invoice.
-
-You must return a JSON object containing:
-
-Main Fields:
+Please extract the following fields:
 - invoice_number
 - invoice_date
 - fournisseur_name
@@ -135,22 +125,20 @@ Main Fields:
 - total_ttc
 - currency
 
-Line Items:
-- products: a list of objects, each with:
-  - designation
-  - quantity
-  - unit_price
-  - total_price
+Also extract product details as a list of objects with:
+- designation
+- quantity
+- unit_price
+- total_price
 
-Return only a valid JSON object. Do not include explanations, markdown, or any formatting.
-If any field is missing, return null or an empty string — do not omit it.
-        """
-
+Return a valid JSON object containing only the required fields.
+"""
 
         completion = openai.ChatCompletion.create(
             engine=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
             messages=[
-                {"role": "system", "content": prompt.strip()},
+                {"role": "system", "content": "You are a helpful assistant that extracts supplier information from invoices."},
+                {"role": "user", "content": prompt.strip()},
                 {"role": "user", "content": text}
             ],
             temperature=0.7,
@@ -190,7 +178,11 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
             "fournisseur_ice", "fournisseur_cnss", "fournisseur_if",
             "total_ht", "vat_amount", "total_ttc", "currency"
         ]
-        missing = [k for k in required_keys if ai_entities.get(k) in [None, "", "null"]] if isinstance(ai_entities, dict) else required_keys
+        missing = []
+        for k in required_keys:
+            val = ai_entities.get(k)
+            if val is None or str(val).strip() in ["", "null"]:
+                missing.append(k)
 
         if missing:
             print(f"⚠️ Missing keys from AI: {missing}")
