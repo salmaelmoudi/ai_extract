@@ -18,13 +18,18 @@ def create_produit_table():
     conn.commit()
     conn.close()
 
-def insert_produits(factures_id, produits):
-    conn = get_connection()
+
+def insert_produits(factures_id, produits, conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+
     cursor = conn.cursor()
     for p in produits:
         cursor.execute("""
-        INSERT INTO Produit (factures_id, nom, quantite, prix_unitaire, total)
-        VALUES (?, ?, ?, ?, ?)
+            INSERT INTO Produit (factures_id, nom, quantite, prix_unitaire, total)
+            VALUES (?, ?, ?, ?, ?)
         """, (
             factures_id,
             p.get("designation") or p.get("name") or p.get("nom"),
@@ -32,5 +37,8 @@ def insert_produits(factures_id, produits):
             float(p.get("unit_price", 0)),
             float(p.get("total_price", 0)) or float(p.get("total", 0))
         ))
-    conn.commit()
-    conn.close()
+
+    if close_conn:
+        conn.commit()
+        conn.close()
+    # if conn provided, caller is responsible for commit/close

@@ -20,28 +20,35 @@ def create_fournisseur_table():
     conn.commit()
     conn.close()
 
-def insert_fournisseur(data):
-    conn = get_connection()
+
+def insert_fournisseur(data, conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+
     cursor = conn.cursor()
-
-    cursor.execute("SELECT id FROM Fournisseur WHERE nom = ? AND ice = ?", (data["nom"], data["ice"]))
-    row = cursor.fetchone()
-    if row:
-        conn.close()
-        return row[0]
-
     cursor.execute("""
-    INSERT INTO Fournisseur (nom, ice, [if], adresse, tel, email, siteweb)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO Fournisseur
+        (nom, ice, [if], cnss, adresse, tel, email, siteweb)
+        OUTPUT INSERTED.id
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        data["nom"], data["ice"], data["if"], data["adresse"],
-        data["tel"], data["email"], data["siteweb"]
+        data.get('nom'),
+        data.get('ice'),
+        data.get('if'),
+        data.get('cnss') or data.get('fournisseur_cnss'),
+        data.get('adresse') or data.get('fournisseur_address'),
+        data.get('tel', ""),
+        data.get('email', ""),
+        data.get('siteweb', "")
     ))
-    cursor.execute("SELECT SCOPE_IDENTITY()")
-    inserted_id = cursor.fetchone()[0]
-    conn.commit()
-    conn.close()
-    return inserted_id
+    new_id = cursor.fetchone()[0]
+
+    if close_conn:
+        conn.commit()
+        conn.close()
+    return new_id
 
 def get_all_fournisseurs():
     conn = get_connection()
