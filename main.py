@@ -94,6 +94,38 @@ def extract_first_json(text):
                 return text[start_idx:i+1]
     return None
 
+# 🧹 Product sanity filter
+def clean_products(products):
+    cleaned = []
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+
+        desc = str(p.get("designation", "")).strip()
+        qty = safe_float(p.get("quantity"))
+        unit_price = safe_float(p.get("unit_price"))
+        total_price = safe_float(p.get("total_price"))
+
+        # Skip if designation contains banking info or is empty
+        if not desc or re.search(r"\bRIB\b|\bIBAN\b|\bcompte\b|Crédit du Maroc", desc, re.IGNORECASE):
+            continue
+
+        # Skip unrealistic quantities or prices
+        if qty <= 0 or qty > 100000:
+            continue
+        if unit_price <= 0 or unit_price > 1_000_000:
+            continue
+        if total_price <= 0 or total_price > 1_000_000_000:
+            continue
+
+        cleaned.append({
+            "designation": desc,
+            "quantity": qty,
+            "unit_price": unit_price,
+            "total_price": total_price
+        })
+    return cleaned
+
 # 📦 Extraction avec Azure OpenAI
 def extract_entities_with_ai(text: str, excluded_entreprise: dict) -> dict:
     try:
@@ -110,7 +142,7 @@ You are parsing an invoice. The following enterprise is the client (do NOT extra
 
 {client_info}
 
-Your job is to identify and return structured data about the *other* company (the supplier).
+Your job is to identify and return structured data about the *other* company (the supplier), check header and footer if needed.
 
 Please extract the following fields:
 - invoice_number
@@ -131,7 +163,7 @@ Also extract product details as a list of objects with:
 - unit_price
 - total_price
 
-Return a valid JSON object containing only the required fields.
+⚠️ Do NOT include payment instructions, bank details, RIB, IBAN, contact info, or footer text as products.
 """
 
         completion = openai.ChatCompletion.create(
@@ -151,7 +183,14 @@ Return a valid JSON object containing only the required fields.
         json_str = extract_first_json(raw_reply)
         if not json_str:
             return {"error": "Could not find JSON object in AI reply", "raw_reply": raw_reply}
-        return json.loads(json_str)
+
+        parsed = json.loads(json_str)
+
+        # Apply product cleanup
+        if "products" in parsed:
+            parsed["products"] = clean_products(parsed["products"])
+
+        return parsed
 
     except Exception as e:
         return {"error": "Failed to call AI model", "details": str(e)}
@@ -190,12 +229,17 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
 
         if isinstance(ai_entities, dict) and not ai_entities.get("error"):
             if not ai_entities.get("invoice_number"):
-                match = re.search(r"(Facture|Invoice)[^\d]{0,5}(\d{4,})", text, re.IGNORECASE)
+                match = re.search(r"(Facture|Invoice)[^\d]{0,5}(\d{2,}/\d{2,}|\d+)", text, re.IGNORECASE)
                 if match:
                     ai_entities["invoice_number"] = match.group(2)
                     print(f"✅ Numéro de facture récupéré depuis le texte: {ai_entities['invoice_number']}")
-                else:
-                    print("❌ Numéro de facture introuvable dans le texte.")
+
+            if not ai_entities.get("invoice_date") and not ai_entities.get("date"):
+                date_match = re.search(r"(\d{2}/\d{2}/\d{4})|(\d{4}-\d{2}-\d{2})", text)
+                if date_match:
+                    found_date = date_match.group(0)
+                    ai_entities["invoice_date"] = found_date
+                    print(f"✅ Date récupérée par fallback regex: {found_date}")
 
             date_valide = ai_entities.get("invoice_date") or ai_entities.get("date")
             if not date_valide:
@@ -203,14 +247,16 @@ async def extract_invoice(file: UploadFile = File(...), entreprise_id: int = For
 
             insert_facture({
                 "numero": ai_entities.get("invoice_number") or ai_entities.get("numero"),
-                "date": date_valide,
-                "client": ai_entities.get("fournisseur_name") or ai_entities.get("fournisseur"),
-                "ice": ai_entities.get("fournisseur_ice") or ai_entities.get("ice"),
-                "cnss": ai_entities.get("fournisseur_cnss", "") or ai_entities.get("cnss", ""),
-                "if": ai_entities.get("fournisseur_if", "") or ai_entities.get("if", ""),
+                "date": safe_date(date_valide),
+                "fournisseur_name": ai_entities.get("fournisseur_name") or ai_entities.get("fournisseur"),
+                "fournisseur_address": ai_entities.get("fournisseur_address") or ai_entities.get("adresse"),
+                "fournisseur_ice": ai_entities.get("fournisseur_ice") or ai_entities.get("ice"),
+                "fournisseur_cnss": ai_entities.get("fournisseur_cnss") or ai_entities.get("cnss"),
+                "fournisseur_if": ai_entities.get("fournisseur_if") or ai_entities.get("if"),
                 "total_ht": ai_entities.get("total_ht") or ai_entities.get("montant_ht"),
-                "tva": ai_entities.get("vat_amount") or ai_entities.get("tva"),
+                "vat_amount": ai_entities.get("vat_amount") or ai_entities.get("tva"),
                 "total_ttc": ai_entities.get("total_ttc") or ai_entities.get("montant_ttc"),
+                "products": clean_products(ai_entities.get("products", []))
             })
 
         return JSONResponse(content={

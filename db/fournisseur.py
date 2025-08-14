@@ -14,7 +14,8 @@ def create_fournisseur_table():
         adresse NVARCHAR(255),
         tel NVARCHAR(50),
         email NVARCHAR(100),
-        siteweb NVARCHAR(100)
+        siteweb NVARCHAR(100),
+        cnss NVARCHAR(100)
     )
     """)
     conn.commit()

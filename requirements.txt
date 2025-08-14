@@ -6,3 +6,6 @@ python-docx
 openpyxl
 pytesseract
 spacy
+openai==0.28
+sqlalchemy
+pandas
